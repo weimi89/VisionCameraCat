@@ -1,13 +1,42 @@
 import React, { useEffect, useState } from 'react'
-import { StyleSheet, View, Text, TouchableOpacity, SafeAreaView, StatusBar } from 'react-native'
-import { Camera, useCameraDevices, useCameraFormat, useCodeScanner, useFrameProcessor } from 'react-native-vision-camera'
+import { StyleSheet, View, Text, TouchableOpacity, StatusBar } from 'react-native'
+import { Camera, useCameraDevices } from 'react-native-vision-camera'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
+import SafeAreaView from 'react-native-safe-area-view'
+import { CameraHighlights } from '@mgcrea/vision-camera-barcode-scanner'
+
 import { requestCameraPermission } from './utils'
+import { useBarcodeScanner } from './hooks/useBarcodeScanner'
 
 export default function App() {
-  const [codeTypes, setCodeTypes] = useState(['qr', 'code-128', 'code-39'])
+
   const [codeValue, setCodeValue] = useState('')
+
+  const [isCloseScanner, setIsCloseScanner] = useState(false)
+
   // Ask for camera permission
   const [hasPermission, setHasPermission] = useState(false)
+
+  const { props: cameraProps, highlights } = useBarcodeScanner({
+    fps: 5,
+    barcodeTypes: ['qr', 'code-128', 'code-39'],
+    scanMode: 'continuous',
+    onBarcodeScanned: (barcodes) => {
+      'worklet'
+      if (barcodes.length > 0) {
+
+        // console.log(
+        //   `掃描到 ${barcodes.length} 個條碼，值為=${JSON.stringify(
+        //     barcodes.map((barcode) => `${barcode.type}:${barcode.value}`),
+        //   )} !`,
+        // )
+      }
+    },
+  })
+
+  const devices = useCameraDevices()
+  const device = devices.find(({ position }) => position === 'back')
+
   useEffect(() => {
     const runEffect = async () => {
       const status = await requestCameraPermission()
@@ -16,64 +45,96 @@ export default function App() {
     runEffect()
   }, [])
 
-  const codeScanner = useCodeScanner({
-    codeTypes: codeTypes,
-    onCodeScanned: (codes) => {
-      if(codes[0]?.value === codeValue) return
-      setCodeValue(codes[0]?.value || '') 
-      console.log(JSON.stringify(codes, null, 2))
-    }
-  })
+  useEffect(() => {
+    console.log(JSON.stringify(highlights, null, 2))
+  }, [highlights])
 
-  const devices = useCameraDevices()
-  const device = devices.find(({ position }) => position === 'back')
-  const format = useCameraFormat(device, [
-    { videoResolution: { width: 1920, height: 1080 } },
-  ])
   if (!device || !hasPermission) {
     return null
   }
 
-
   return (
-    <SafeAreaView style={{ flex: 1, }}>
+    <SafeAreaProvider>
       <StatusBar
         barStyle={'light-content'}
+        backgroundColor="transparent"
+        translucent={true}
       />
-      <View style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: 250 }}>
-        <Camera
-          enableFpsGraph
-          orientation="portrait"
-          style={{ height: '100%', width: '100%' }}
-          device={device}
-          format={format}
-          codeScanner={codeScanner}
-          resizeMode="cover"
-          isActive={true}
-        />
-        <View style={{ position: 'absolute', borderWidth: 4, borderColor: 'red', width: '80%', height: 150 }}></View>
-      </View>
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ fontSize: 40, marginBottom: 20, color: 'green'}}>{codeValue}</Text>
-        <TouchableOpacity onPress={() => setCodeTypes([])} style={{ backgroundColor: 'green', padding: 20, borderRadius: 10, marginBottom: 8}}>
-          <Text style={{ color: 'white' }}>暫停掃描</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCodeTypes(['qr', 'code-128', 'code-39'])} style={{ backgroundColor: 'green', padding: 20, borderRadius: 10, }}>
-          <Text style={{ color: 'white', }}>開始掃描</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} forceInset={{ top: 'never', bottom: 'never' }}>
+        <View style={styles.container}>
+          <Camera
+            // enableFpsGraph
+            style={{ width: '100%', height: '100%' }}
+            device={device}
+            isActive={true}
+            {...cameraProps}
+          />
+          <View style={styles.overlay}>
+            <View style={styles.unfocusedArea} />
+            <View style={styles.focusedArea}>
+              <View style={styles.unfocusedArea} />
+              <View style={styles.clearArea} />
+              <View style={styles.unfocusedArea} />
+            </View>
+            <View style={styles.unfocusedArea} />
+          </View>
+          <CameraHighlights highlights={highlights} color="#000" />
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 40, marginBottom: 20, color: 'green' }}>{codeValue}</Text>
+          <TouchableOpacity onPress={() => setIsCloseScanner(true)} style={{ backgroundColor: 'green', padding: 20, borderRadius: 10, marginBottom: 8 }}>
+            <Text style={{ color: 'white' }}>暫停掃描</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setIsCloseScanner(false)} style={{ backgroundColor: 'green', padding: 20, borderRadius: 10, }}>
+            <Text style={{ color: 'white', }}>開始掃描</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     backgroundColor: 'gray',
+    height: 250,
     position: 'relative',
-    // height: 640, // 1920 / 5
-    // width: 320', // 1080 / 5
-    // height: 384, // 1920 / 5
-    // width: 384, // 1080 / 5
+  },
+  overlay: {
+    flex: 1,
+    flexDirection: 'column',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  unfocusedArea: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)', // 淺藍色
+  },
+  focusedArea: {
+    flex: 2,
+    flexDirection: 'row',
+  },
+  clearArea: {
+    flex: 8,
+    borderColor: 'peachpuff', // 淺粉色
+    borderWidth: 2,
+    // backgroundColor: 'transparent',
+  },
+  instructions: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 32,
+    backgroundColor: 'rgba(0,0,0,0.5)', // 淺藍色
+  },
+  instructionsText: {
+    color: '#fff', // 淺粉色
+    textAlign: 'center',
+    fontWeight: '400',
+    fontSize: 18,
   },
 })
