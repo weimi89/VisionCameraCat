@@ -1,18 +1,32 @@
-import { useEffect, useRef, useState } from "react"
-import { Platform } from "react-native"
-import { runAtTargetFps, useFrameProcessor } from "react-native-vision-camera"
-import { useSharedValue, Worklets } from "react-native-worklets-core"
-import { scanCodes } from "@mgcrea/vision-camera-barcode-scanner"
-import { computeHighlights } from "../utils/highlights"
+import { useEffect, useRef, useState } from 'react'
+import { Platform } from 'react-native'
+import { runAtTargetFps, useFrameProcessor } from 'react-native-vision-camera'
+import { useSharedValue, Worklets } from 'react-native-worklets-core'
+import { scanCodes } from '@mgcrea/vision-camera-barcode-scanner'
+import { computeBoundingBoxFromCornerPoints, applyScaleFactor, applyTransformation } from '@mgcrea/vision-camera-barcode-scanner'
+
+const transformCornerPoints = (cornerPoints, frame, adjustedLayout, resizeMode) => {
+  'worklet'
+  return cornerPoints
+    ? cornerPoints.map((point) =>
+      applyTransformation(
+        applyScaleFactor(point, frame, adjustedLayout, resizeMode),
+        adjustedLayout,
+        frame.orientation
+      )
+    )
+    : []
+}
 
 export const useBarcodeScanner = ({
   barcodeTypes,
   regionOfInterest,
   onBarcodeScanned,
   disableHighlighting,
-  defaultResizeMode = "cover",
-  scanMode = "continuous",
+  defaultResizeMode = 'cover',
+  scanMode = 'continuous',
   fps = 2,
+  isScanEnabled = true,
 }) => {
   const ref = useRef(null)
 
@@ -45,33 +59,64 @@ export const useBarcodeScanner = ({
   const [highlights, setHighlights] = useState([])
   const setHighlightsJS = Worklets.createRunInJsFn(setHighlights)
 
-  // Pixel 格式在 Android 上必須是 "yuv"，在 iOS 上必須是 "native"
-  const pixelFormat = Platform.OS === "android" ? "yuv" : "native"
+  // Pixel 格式在 Android 上必須是 'yuv'，在 iOS 上必須是 'native'
+  const pixelFormat = Platform.OS === 'android' ? 'yuv' : 'native'
 
   // 用於處理每個幀的處理器
   const frameProcessor = useFrameProcessor(
     (frame) => {
-      "worklet";
+      'worklet'
       runAtTargetFps(fps, () => {
-        "worklet"
+        'worklet'
         const { value: layout } = layoutRef
         const { value: prevBarcodes } = barcodesRef
         const { value: resizeMode } = resizeModeRef
+
+        /* iOS:
+        * 'portrait' -> 'landscape-right'
+        * 'portrait-upside-down' -> 'landscape-left'
+        * 'landscape-left' -> 'portrait'
+        * 'landscape-right' -> 'portrait-upside-down'
+        */
+        const adjustedLayout =
+          ['portrait', 'portrait-upside-down'].includes(frame.orientation)
+            ? {
+              width: layout.height,
+              height: layout.width,
+            }
+            : layout
 
         const options = {}
         if (barcodeTypes !== undefined) {
           options.barcodeTypes = barcodeTypes
         }
-        if (regionOfInterest !== undefined) {
+
+        const barcodes = scanCodes(frame, options).filter(({ cornerPoints }) => {
+
+          if (!isScanEnabled) {
+            return false
+          }
+
+          if (regionOfInterest === undefined) {
+            return true
+          }
+
           const { x, y, width, height } = regionOfInterest
-          options.regionOfInterest = [x, y, width, height]
-        }
-        const barcodes = scanCodes(frame, options)
+
+          const translatedCornerPoints = transformCornerPoints(cornerPoints, frame, adjustedLayout, resizeMode)
+
+          return translatedCornerPoints.every((point) =>
+            point.x >= x &&
+            point.x <= x + width &&
+            point.y >= y &&
+            point.y <= y + height
+          )
+        })
 
         if (barcodes.length > 0) {
-          if (scanMode === "continuous") {
+          if (scanMode === 'continuous') {
             onBarcodeScanned(barcodes, frame)
-          } else if (scanMode === "once") {
+          } else if (scanMode === 'once') {
             const hasChanged =
               prevBarcodes.length !== barcodes.length ||
               JSON.stringify(prevBarcodes.map(({ value }) => value)) !==
@@ -84,26 +129,27 @@ export const useBarcodeScanner = ({
         }
 
         if (disableHighlighting !== true && resizeMode !== undefined) {
+
           if (isPristineRef.value) {
             isPristineRef.value = false
             return
           }
-          const { value: prevHighlights } = highlightsRef
-          const highlights = computeHighlights(
-            barcodes,
-            frame,
-            layout,
-            resizeMode,
-          )
 
-          if (prevHighlights.length === 0 && highlights.length === 0) {
-            return
-          }
+          const highlights = barcodes.map(({ value, cornerPoints }, index) => {
+            const translatedCornerPoints = transformCornerPoints(cornerPoints, frame, adjustedLayout, resizeMode)
+            const valueFromCornerPoints = computeBoundingBoxFromCornerPoints(translatedCornerPoints)
+            return {
+              key: `${value}.${index}`,
+              corners: translatedCornerPoints,
+              ...valueFromCornerPoints,
+            }
+          })
+
           setHighlightsJS(highlights)
         }
       })
     },
-    [layoutRef, resizeModeRef, highlightsRef, disableHighlighting],
+    [layoutRef, resizeModeRef, highlightsRef, disableHighlighting, isScanEnabled, isScanEnabled],
   )
 
   return {

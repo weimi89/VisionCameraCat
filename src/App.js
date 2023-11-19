@@ -1,41 +1,39 @@
 import React, { useEffect, useState } from 'react'
-import { StyleSheet, View, Text, TouchableOpacity, StatusBar } from 'react-native'
+import { StyleSheet, View, Text, TouchableOpacity, StatusBar, Dimensions } from 'react-native'
 import { Camera, useCameraDevices } from 'react-native-vision-camera'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import SafeAreaView from 'react-native-safe-area-view'
-import { CameraHighlights } from '@mgcrea/vision-camera-barcode-scanner'
+import { Canvas, DiffRect, Points, Path, Skia, rrect, rect, vec } from '@shopify/react-native-skia'
+import { Worklets } from 'react-native-worklets-core'
 
 import { requestCameraPermission } from './utils'
 import { useBarcodeScanner } from './hooks/useBarcodeScanner'
 
 export default function App() {
 
-  const [codeValue, setCodeValue] = useState('')
+  const [codes, setCodes] = useState([])
+  const setCodesJS = Worklets.createRunInJsFn(setCodes)
 
   const [isCloseScanner, setIsCloseScanner] = useState(false)
 
   // Ask for camera permission
   const [hasPermission, setHasPermission] = useState(false)
 
+  const devices = useCameraDevices()
+  const device = devices.find(({ position }) => position === 'back')
+  const { width: viewportWidth } = Dimensions.get('window')
+
   const { props: cameraProps, highlights } = useBarcodeScanner({
     fps: 5,
     barcodeTypes: ['qr', 'code-128', 'code-39'],
     scanMode: 'continuous',
+    regionOfInterest: { x: 0, y: 0, width: viewportWidth, height: 250 },
+    isScanEnabled: !isCloseScanner,
     onBarcodeScanned: (barcodes) => {
       'worklet'
-      if (barcodes.length > 0) {
-
-        // console.log(
-        //   `掃描到 ${barcodes.length} 個條碼，值為=${JSON.stringify(
-        //     barcodes.map((barcode) => `${barcode.type}:${barcode.value}`),
-        //   )} !`,
-        // )
-      }
+      setCodesJS(barcodes)
     },
   })
-
-  const devices = useCameraDevices()
-  const device = devices.find(({ position }) => position === 'back')
 
   useEffect(() => {
     const runEffect = async () => {
@@ -46,8 +44,26 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    console.log(JSON.stringify(highlights, null, 2))
-  }, [highlights])
+    console.log(
+      `掃描到 ${codes.length} 個條碼，值為=${JSON.stringify(
+        codes.map((barcode) => `${barcode.type}:${barcode.value}`),
+      )} !`,
+    )
+  }, [codes])
+
+  const calculatePath = (corners) => {
+    const path = Skia.Path.Make()
+    if (corners.length > 0) {
+      const { x, y } = corners[0]
+      path.moveTo(x, y)
+      for (let i = 1; i < corners.length; i++) {
+        const { x, y } = corners[i]
+        path.lineTo(x, y)
+      }
+      path.close()
+    }
+    return path
+  }
 
   if (!device || !hasPermission) {
     return null
@@ -69,19 +85,31 @@ export default function App() {
             isActive={true}
             {...cameraProps}
           />
-          <View style={styles.overlay}>
-            <View style={styles.unfocusedArea} />
-            <View style={styles.focusedArea}>
-              <View style={styles.unfocusedArea} />
-              <View style={styles.clearArea} />
-              <View style={styles.unfocusedArea} />
-            </View>
-            <View style={styles.unfocusedArea} />
-          </View>
-          <CameraHighlights highlights={highlights} color="#000" />
+          <Canvas style={styles.overlay}>
+            {highlights.map(({ key, corners }) => (
+              <Path
+                key={key}
+                path={calculatePath(corners)}
+                color="rgba(255, 0, 0, 0.3)"
+              />
+              // <Points
+              //   key={key}
+              //   points={[...corners.map(({ x, y }) => vec(x, y)), vec(corners[0].x, corners[0].y)]}
+              //   mode="polygon"
+              //   color="red"
+              //   style="stroke"
+              //   strokeWidth={1}
+              // />
+            ))}
+            <DiffRect
+              inner={rrect(rect(50, 50, viewportWidth - 100, 250 - 100), 0, 0)}
+              outer={rrect(rect(0, 0, viewportWidth, 250), 0, 0)}
+              color="rgba(0, 0, 0, 0.2)"
+            />
+          </Canvas>
         </View>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ fontSize: 40, marginBottom: 20, color: 'green' }}>{codeValue}</Text>
+          {/* <Text style={{ fontSize: 40, marginBottom: 20, color: 'green' }}>{codeValue}</Text> */}
           <TouchableOpacity onPress={() => setIsCloseScanner(true)} style={{ backgroundColor: 'green', padding: 20, borderRadius: 10, marginBottom: 8 }}>
             <Text style={{ color: 'white' }}>暫停掃描</Text>
           </TouchableOpacity>
